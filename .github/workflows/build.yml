@@ -20,8 +20,9 @@ jobs:
 
       - name: Stub missing Kconfig files (known gaps in vendor release)
         run: |
-          echo "Scanning all 'source \"path/Kconfig\"' directives for missing targets..."
-          grep -rhoP '(?<=^source\s")[^"]+' --include=Kconfig . | sort -u > /tmp/all_sources.txt
+          echo "Scanning all 'source \"path/Kconfig\"' directives (incl. indented) for missing targets..."
+          grep -rhoP '(?<=^[ \t]*source\s")[^"]+' --include=Kconfig . | sort -u > /tmp/all_sources.txt
+          echo "Found $(wc -l < /tmp/all_sources.txt) total source directives"
           MISSING=0
           while IFS= read -r f; do
             [ -z "$f" ] && continue
