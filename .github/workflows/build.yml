@@ -18,17 +18,13 @@ jobs:
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
             device-tree-compiler python3 cpio rsync kmod
 
-      - name: Diagnose block/Kconfig around line 252
+      - name: Stub missing Kconfig files (known gaps in vendor release, quoted and unquoted source)
         run: |
-          echo "=== raw bytes, lines 245-258, tabs/EOL/non-printing shown ==="
-          sed -n '245,258p' block/Kconfig | cat -A
-          echo "=== hexdump of just line 252 ==="
-          sed -n '252p' block/Kconfig | xxd | head -20
-
-      - name: Stub missing Kconfig files (known gaps in vendor release)
-        run: |
-          echo "Scanning all 'source \"path/Kconfig\"' directives (incl. indented) for missing targets..."
-          grep -rhoP '^[ \t]*source\s+"\K[^"]+' --include=Kconfig . | tr -d '\r' | sed 's/[[:space:]]*$//' | sort -u > /tmp/all_sources.txt
+          echo "Scanning all 'source ...' directives (quoted, unquoted, indented) for missing targets..."
+          grep -rhoP '^[ \t]*source[ \t]+\K.*' --include=Kconfig . \
+            | sed -e 's/^"//' -e 's/"$//' -e 's/[[:space:]]*$//' \
+            | tr -d '\r' \
+            | sort -u > /tmp/all_sources.txt
           echo "Found $(wc -l < /tmp/all_sources.txt) total source directives"
           MISSING=0
           while IFS= read -r f; do
@@ -42,6 +38,7 @@ jobs:
             esac
             if [ ! -f "$f" ]; then
               d="$(dirname "$f")"
+              # -e follows symlinks (false for dangling symlink), so also check -L for the dirent itself
               if { [ -e "$d" ] || [ -L "$d" ]; } && [ ! -d "$d" ]; then
                 echo "Removing stray non-directory entry (file/symlink) blocking: $d"
                 rm -f "$d"
@@ -54,10 +51,12 @@ jobs:
           done < /tmp/all_sources.txt
           echo "Total stubbed via scan: $MISSING"
 
-      - name: Force-stub known holdout (block/uxio_first) regardless of scan result
+      - name: Force-stub known holdout (block/uxio_first) as a safety net
         run: |
           if [ ! -f "block/uxio_first/Kconfig" ]; then
-            [ -e "block/uxio_first" ] && [ ! -d "block/uxio_first" ] && rm -f "block/uxio_first"
+            if { [ -e "block/uxio_first" ] || [ -L "block/uxio_first" ]; } && [ ! -d "block/uxio_first" ]; then
+              rm -f "block/uxio_first"
+            fi
             mkdir -p block/uxio_first
             echo "# stub: file absent from public source release, auto-generated to satisfy Kconfig parser" > block/uxio_first/Kconfig
             echo "Force-stubbed block/uxio_first/Kconfig"
