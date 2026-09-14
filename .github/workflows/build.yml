@@ -18,7 +18,7 @@ jobs:
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
             device-tree-compiler python3 cpio rsync kmod
 
-      - name: Stub missing Kconfig + Makefile pairs (known gaps in vendor release)
+      - name: Stub missing Kconfig + Makefile pairs (from Kconfig 'source' directives)
         run: |
           echo "Scanning all 'source ...' directives (quoted, unquoted, indented) for missing targets..."
           grep -rhoP '^[ \t]*source[ \t]+\K.*' --include=Kconfig . \
@@ -32,17 +32,14 @@ jobs:
             [ -z "$f" ] && continue
             case "$f" in
               *'$('*)
-                echo "Skipping kbuild macro path (resolved dynamically, not a literal file): $f"
                 continue
                 ;;
             esac
             if [ ! -f "$f" ]; then
               d="$(dirname "$f")"
               if { [ -e "$d" ] || [ -L "$d" ]; } && [ ! -d "$d" ]; then
-                echo "Removing stray non-directory entry (file/symlink) blocking: $d"
                 rm -f "$d"
               fi
-              echo "Missing -> stubbing: [$f]"
               mkdir -p "$d"
               echo "# stub: file absent from public source release, auto-generated to satisfy Kconfig parser" > "$f"
               if [ ! -f "$d/Makefile" ]; then
@@ -51,11 +48,38 @@ jobs:
               MISSING=$((MISSING+1))
             fi
           done < /tmp/all_sources.txt
-          echo "Total stubbed via scan: $MISSING"
+          echo "Total stubbed via Kconfig scan: $MISSING"
+
+      - name: Stub missing Makefiles (from obj-y/obj-m/obj-\$(CONFIG_x) directory descent)
+        run: |
+          echo "Scanning all Makefiles for obj-y/obj-m/obj-\$(CONFIG_x) subdirectory references..."
+          COUNT_FILE=/tmp/makefile_stub_count
+          echo 0 > "$COUNT_FILE"
+          find . -path ./out -prune -o -path ./.git -prune -o -name Makefile -print | while IFS= read -r mf; do
+            mdir="$(dirname "$mf")"
+            joined="$(sed ':a;N;$!ba;s/\\\n/ /g' "$mf" 2>/dev/null)"
+            printf '%s\n' "$joined" | grep -oP '(?m)^[ \t]*obj-\S*[ \t]*[+:]?=[ \t]*\K.*' 2>/dev/null | while IFS= read -r rhs; do
+              printf '%s\n' "$rhs" | grep -oE '[A-Za-z0-9_./-]+/' | while IFS= read -r tok; do
+                case "$tok" in *'$('*) continue ;; esac
+                target="${mdir#./}/${tok}"
+                target="${target%/}"
+                if [ ! -f "$target/Makefile" ] && [ ! -f "$target/Kbuild" ]; then
+                  if { [ -e "$target" ] || [ -L "$target" ]; } && [ ! -d "$target" ]; then
+                    rm -f "$target"
+                  fi
+                  mkdir -p "$target"
+                  echo "# stub: empty makefile, satisfies kbuild recursive descent for stripped-out feature" > "$target/Makefile"
+                  echo "Stubbed Makefile for: $target"
+                  n=$(cat "$COUNT_FILE"); echo $((n+1)) > "$COUNT_FILE"
+                fi
+              done
+            done
+          done
+          echo "Total stubbed via Makefile scan: $(cat "$COUNT_FILE")"
 
       - name: Force-stub known holdouts as a safety net
         run: |
-          for d in block/uxio_first arch/arm64/kernel/rootguard; do
+          for d in block/uxio_first arch/arm64/kernel/rootguard kernel/keventupload; do
             if { [ -e "$d" ] || [ -L "$d" ]; } && [ ! -d "$d" ]; then
               rm -f "$d"
             fi
