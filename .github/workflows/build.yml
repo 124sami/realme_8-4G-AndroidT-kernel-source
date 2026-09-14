@@ -1,0 +1,58 @@
+name: Build Kernel (No Module Sig)
+on: workflow_dispatch
+
+env:
+  DEFCONFIG: k85v1_64_k419_defconfig
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential bc bison flex libssl-dev libncurses-dev \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+            device-tree-compiler python3 cpio rsync kmod
+
+      - name: Generate base config
+        run: |
+          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- ${DEFCONFIG}
+
+      - name: Disable module signature enforcement
+        run: |
+          ./scripts/config --file out/.config \
+            -d MODULE_SIG \
+            -d MODULE_SIG_FORCE \
+            -d MODULE_SIG_ALL \
+            -d MODULE_SIG_SHA512
+          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+
+      - name: Confirm signature configs are off
+        run: |
+          echo "=== Resulting config state ==="
+          grep -E "^CONFIG_MODULE_SIG|^# CONFIG_MODULE_SIG" out/.config || true
+
+      - name: Build kernel + modules
+        run: |
+          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+            KCFLAGS="-Wno-error" \
+            -j$(nproc) Image.gz modules 2>&1 | tee build.log
+
+      - name: Collect output
+        run: |
+          mkdir -p artifact
+          cp out/arch/arm64/boot/Image.gz artifact/ 2>/dev/null || echo "Image.gz not found - check build.log"
+          find out -name "*.ko" -exec cp {} artifact/ \; 2>/dev/null || true
+          cp build.log artifact/
+          ls -la artifact/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: k85v1_64_k419-nosig-kernel
+          path: artifact/
+          retention-days: 14
