@@ -18,6 +18,13 @@ jobs:
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
             device-tree-compiler python3 cpio rsync kmod
 
+      - name: Diagnose block/Kconfig around line 252
+        run: |
+          echo "=== raw bytes, lines 245-258, tabs/EOL/non-printing shown ==="
+          sed -n '245,258p' block/Kconfig | cat -A
+          echo "=== hexdump of just line 252 ==="
+          sed -n '252p' block/Kconfig | xxd | head -20
+
       - name: Stub missing Kconfig files (known gaps in vendor release)
         run: |
           echo "Scanning all 'source \"path/Kconfig\"' directives (incl. indented) for missing targets..."
@@ -25,7 +32,6 @@ jobs:
           echo "Found $(wc -l < /tmp/all_sources.txt) total source directives"
           MISSING=0
           while IFS= read -r f; do
-            # belt-and-suspenders strip in case any stray whitespace/CR survived
             f="$(printf '%s' "$f" | tr -d '\r')"
             [ -z "$f" ] && continue
             case "$f" in
@@ -36,7 +42,6 @@ jobs:
             esac
             if [ ! -f "$f" ]; then
               d="$(dirname "$f")"
-              # -e follows symlinks and is false for a dangling symlink, so also check -L
               if { [ -e "$d" ] || [ -L "$d" ]; } && [ ! -d "$d" ]; then
                 echo "Removing stray non-directory entry (file/symlink) blocking: $d"
                 rm -f "$d"
@@ -47,7 +52,18 @@ jobs:
               MISSING=$((MISSING+1))
             fi
           done < /tmp/all_sources.txt
-          echo "Total stubbed: $MISSING"
+          echo "Total stubbed via scan: $MISSING"
+
+      - name: Force-stub known holdout (block/uxio_first) regardless of scan result
+        run: |
+          if [ ! -f "block/uxio_first/Kconfig" ]; then
+            [ -e "block/uxio_first" ] && [ ! -d "block/uxio_first" ] && rm -f "block/uxio_first"
+            mkdir -p block/uxio_first
+            echo "# stub: file absent from public source release, auto-generated to satisfy Kconfig parser" > block/uxio_first/Kconfig
+            echo "Force-stubbed block/uxio_first/Kconfig"
+          else
+            echo "block/uxio_first/Kconfig already present - no action needed"
+          fi
 
       - name: Generate base config
         run: |
