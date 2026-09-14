@@ -18,7 +18,7 @@ jobs:
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
             device-tree-compiler python3 cpio rsync kmod
 
-      - name: Stub missing Kconfig files (known gaps in vendor release, quoted and unquoted source)
+      - name: Stub missing Kconfig + Makefile pairs (known gaps in vendor release)
         run: |
           echo "Scanning all 'source ...' directives (quoted, unquoted, indented) for missing targets..."
           grep -rhoP '^[ \t]*source[ \t]+\K.*' --include=Kconfig . \
@@ -38,7 +38,6 @@ jobs:
             esac
             if [ ! -f "$f" ]; then
               d="$(dirname "$f")"
-              # -e follows symlinks (false for dangling symlink), so also check -L for the dirent itself
               if { [ -e "$d" ] || [ -L "$d" ]; } && [ ! -d "$d" ]; then
                 echo "Removing stray non-directory entry (file/symlink) blocking: $d"
                 rm -f "$d"
@@ -46,23 +45,25 @@ jobs:
               echo "Missing -> stubbing: [$f]"
               mkdir -p "$d"
               echo "# stub: file absent from public source release, auto-generated to satisfy Kconfig parser" > "$f"
+              if [ ! -f "$d/Makefile" ]; then
+                echo "# stub: empty makefile, satisfies kbuild recursive descent for stripped-out feature" > "$d/Makefile"
+              fi
               MISSING=$((MISSING+1))
             fi
           done < /tmp/all_sources.txt
           echo "Total stubbed via scan: $MISSING"
 
-      - name: Force-stub known holdout (block/uxio_first) as a safety net
+      - name: Force-stub known holdouts as a safety net
         run: |
-          if [ ! -f "block/uxio_first/Kconfig" ]; then
-            if { [ -e "block/uxio_first" ] || [ -L "block/uxio_first" ]; } && [ ! -d "block/uxio_first" ]; then
-              rm -f "block/uxio_first"
+          for d in block/uxio_first arch/arm64/kernel/rootguard; do
+            if { [ -e "$d" ] || [ -L "$d" ]; } && [ ! -d "$d" ]; then
+              rm -f "$d"
             fi
-            mkdir -p block/uxio_first
-            echo "# stub: file absent from public source release, auto-generated to satisfy Kconfig parser" > block/uxio_first/Kconfig
-            echo "Force-stubbed block/uxio_first/Kconfig"
-          else
-            echo "block/uxio_first/Kconfig already present - no action needed"
-          fi
+            mkdir -p "$d"
+            [ -f "$d/Kconfig" ] || echo "# stub: file absent from public source release, auto-generated to satisfy Kconfig parser" > "$d/Kconfig"
+            [ -f "$d/Makefile" ] || echo "# stub: empty makefile, satisfies kbuild recursive descent for stripped-out feature" > "$d/Makefile"
+            echo "Ensured stub present: $d"
+          done
 
       - name: Generate base config
         run: |
