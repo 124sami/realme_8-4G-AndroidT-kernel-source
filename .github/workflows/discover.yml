@@ -1,0 +1,33 @@
+name: Discover Config
+on: workflow_dispatch
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: List defconfigs matching k85v1_64_k419
+        run: |
+          echo "=== Matches for k419 / k85v1 ==="
+          ls arch/arm64/configs/ | grep -i "k419\|k85v1" || true
+          echo ""
+          echo "=== Full defconfig listing (fallback, in case nothing matched above) ==="
+          ls arch/arm64/configs/
+
+      - name: Grep for module signature configs
+        run: |
+          echo "=== MODULE_SIG in configs / Kconfig / Makefile ==="
+          grep -rn "MODULE_SIG" arch/arm64/configs/ init/Kconfig kernel/Makefile 2>/dev/null || true
+          echo ""
+          echo "=== sig_enforce / module_sig in kernel/module*.c and security/ ==="
+          grep -rln "sig_enforce\|module_sig" kernel/module*.c security/ 2>/dev/null || true
+          echo ""
+          echo "=== Any vendor-specific signature/verify flags (oplus/realme naming) ==="
+          grep -rln "MODULE_SIG\|SIG_ENFORCE" --include="*Kconfig*" . 2>/dev/null | grep -v "^./arch/arm64/configs" || true
+
+      - name: Show build.config.mtk.aarch64.gcc (toolchain reference)
+        run: cat build.config.mtk.aarch64.gcc 2>/dev/null || echo "file not found"
+
+      - name: Kernel version
+        run: cat Makefile | head -5
