@@ -18,6 +18,22 @@ jobs:
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
             device-tree-compiler python3 cpio rsync kmod
 
+      - name: Stub missing Kconfig files (known gaps in vendor release)
+        run: |
+          echo "Scanning all 'source \"path/Kconfig\"' directives for missing targets..."
+          grep -rhoP '(?<=^source\s")[^"]+' --include=Kconfig . | sort -u > /tmp/all_sources.txt
+          MISSING=0
+          while read -r f; do
+            [ -z "$f" ] && continue
+            if [ ! -f "$f" ]; then
+              echo "Missing -> stubbing: $f"
+              mkdir -p "$(dirname "$f")"
+              echo "# stub: file absent from public source release, auto-generated to satisfy Kconfig parser" > "$f"
+              MISSING=$((MISSING+1))
+            fi
+          done < /tmp/all_sources.txt
+          echo "Total stubbed: $MISSING"
+
       - name: Generate base config
         run: |
           make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- ${DEFCONFIG}
