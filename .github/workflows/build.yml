@@ -23,11 +23,22 @@ jobs:
           echo "Scanning all 'source \"path/Kconfig\"' directives for missing targets..."
           grep -rhoP '(?<=^source\s")[^"]+' --include=Kconfig . | sort -u > /tmp/all_sources.txt
           MISSING=0
-          while read -r f; do
+          while IFS= read -r f; do
             [ -z "$f" ] && continue
+            case "$f" in
+              *'$('*)
+                echo "Skipping kbuild macro path (resolved dynamically, not a literal file): $f"
+                continue
+                ;;
+            esac
             if [ ! -f "$f" ]; then
+              d="$(dirname "$f")"
+              if [ -e "$d" ] && [ ! -d "$d" ]; then
+                echo "Removing stray non-directory placeholder blocking: $d"
+                rm -f "$d"
+              fi
               echo "Missing -> stubbing: $f"
-              mkdir -p "$(dirname "$f")"
+              mkdir -p "$d"
               echo "# stub: file absent from public source release, auto-generated to satisfy Kconfig parser" > "$f"
               MISSING=$((MISSING+1))
             fi
