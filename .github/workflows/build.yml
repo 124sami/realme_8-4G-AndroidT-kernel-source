@@ -33,8 +33,9 @@ jobs:
             esac
             if [ ! -f "$f" ]; then
               d="$(dirname "$f")"
-              if [ -e "$d" ] && [ ! -d "$d" ]; then
-                echo "Removing stray non-directory placeholder blocking: $d"
+              # -e follows symlinks and is false for a dangling symlink, so also check -L
+              if { [ -e "$d" ] || [ -L "$d" ]; } && [ ! -d "$d" ]; then
+                echo "Removing stray non-directory entry (file/symlink) blocking: $d"
                 rm -f "$d"
               fi
               echo "Missing -> stubbing: $f"
