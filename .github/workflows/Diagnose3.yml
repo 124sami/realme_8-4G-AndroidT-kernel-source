@@ -1,0 +1,28 @@
+name: Diagnose Round 2
+on: workflow_dispatch
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: fs/proc/meminfo.c include context
+        run: |
+          echo "=== lines 1-35 ==="
+          sed -n '1,35p' fs/proc/meminfo.c
+
+      - name: kernel/sched/core.c - context around ux_state usage
+        run: |
+          echo "=== lines 870-955 ==="
+          sed -n '870,955p' kernel/sched/core.c
+
+      - name: Where is ux_state / SA_TYPE_TURBO / ux_uclamp_value actually declared or guarded elsewhere?
+        run: |
+          echo "=== grep across tree ==="
+          grep -rn "ux_state\|SA_TYPE_TURBO\|ux_uclamp_value" --include="*.h" --include="*.c" . | grep -v "kernel/sched/core.c" | head -40
+
+      - name: Is this whole function under an #ifdef we're missing?
+        run: |
+          echo "=== nearest #ifdef/#endif above line 895 ==="
+          awk 'NR<=895 && (/#ifdef/ || /#ifndef/ || /#endif/ || /#else/) {print NR": "$0}' kernel/sched/core.c | tail -20
