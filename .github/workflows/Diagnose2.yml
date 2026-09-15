@@ -1,0 +1,42 @@
+name: Diagnose Missing Headers
+on: workflow_dispatch
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Context around the failing include in mutex.h
+        run: |
+          echo "=== include/linux/mutex.h lines 80-130 ==="
+          sed -n '80,130p' include/linux/mutex.h
+
+      - name: Is sched_assist usage guarded by a CONFIG symbol?
+        run: |
+          echo "=== all sched_assist includes across the tree ==="
+          grep -rn "sched_assist/" --include="*.h" --include="*.c" . | head -60
+          echo ""
+          echo "=== total count of such includes ==="
+          grep -rl "sched_assist/" --include="*.h" --include="*.c" . | wc -l
+
+      - name: Which sched_assist headers are referenced but missing?
+        run: |
+          grep -rhoP '#include\s*<\K[^>]*sched_assist[^>]*' --include="*.h" --include="*.c" . | sort -u | while read -r h; do
+            if [ -f "include/$h" ]; then echo "PRESENT: $h"; else echo "MISSING: $h"; fi
+          done
+
+      - name: What OPLUS config symbols gate this feature?
+        run: |
+          echo "=== OPLUS_FEATURE_SCHED_ASSIST in defconfig ==="
+          grep -n "SCHED_ASSIST" arch/arm64/configs/k85v1_64_k419_defconfig || echo "not in defconfig"
+          echo ""
+          echo "=== how OplusKernelEnvConfig.mk injects it ==="
+          grep -n "SCHED_ASSIST" OplusKernelEnvConfig.mk | head -20
+
+      - name: Are other OPLUS headers missing too? (scope check)
+        run: |
+          grep -rhoP '#include\s*<\K[^>]*(oplus|healthinfo|task_cpustats|keventupload|uxio|midas|klockopt)[^>]*' \
+            --include="*.h" --include="*.c" . 2>/dev/null | sort -u | while read -r h; do
+            if [ ! -f "include/$h" ]; then echo "MISSING: $h"; fi
+          done
