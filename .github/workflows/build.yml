@@ -18,34 +18,37 @@ jobs:
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
             device-tree-compiler python3 cpio rsync kmod
 
-      - name: Show OPLUS feature list (for reference)
-        run: |
-          echo "=== OplusKernelEnvConfig.mk lines 60-130 ==="
-          sed -n '60,130p' OplusKernelEnvConfig.mk
-
       - name: Disable OPLUS features whose source was stripped from the release
         run: |
-          # These are plain -D preprocessor defines, not Kconfig symbols. The code they
-          # guard #includes headers that OPLUS removed from the public source drop, so
-          # undefining them removes both the includes and the code that needs them.
-          for feat in OPLUS_FEATURE_SCHED_ASSIST; do
+          # Plain -D preprocessor defines, not Kconfig symbols. The code they guard
+          # #includes headers OPLUS removed from the public drop, so undefining them
+          # removes both the includes and the code that needs them.
+          # Add a new name here whenever the build hits another missing OPLUS header.
+          FEATURES="
+          OPLUS_FEATURE_SCHED_ASSIST
+          OPLUS_FEATURE_PHOENIX
+          OPLUS_FEATURE_HEALTHINFO
+          OPLUS_FEATURE_TASK_CPUSTATS
+          OPLUS_FEATURE_MM_FEEDBACK
+          "
+          for feat in $FEATURES; do
+            [ -z "$feat" ] && continue
             if grep -qE "^[ \t]*${feat}[ \t]*\\\\?[ \t]*$" OplusKernelEnvConfig.mk; then
               sed -i -E "/^[ \t]*${feat}[ \t]*\\\\?[ \t]*$/d" OplusKernelEnvConfig.mk
               echo "Removed feature define: $feat"
             else
-              echo "NOTE: $feat not found as a standalone list entry - check the dump above"
+              echo "NOTE: $feat not found as a standalone list entry"
             fi
           done
           echo ""
-          echo "=== verify it's gone ==="
-          grep -n "SCHED_ASSIST" OplusKernelEnvConfig.mk || echo "SCHED_ASSIST no longer defined"
+          echo "=== remaining OPLUS_FEATURE entries ==="
+          grep -cE "^[ \t]*OPLUS_(FEATURE|BUG|ARCH)" OplusKernelEnvConfig.mk
 
       - name: Stub missing Kconfig + Makefile pairs (from Kconfig 'source' directives)
         run: |
           grep -rhoP '^[ \t]*source[ \t]+\K.*' --include=Kconfig . \
             | sed -e 's/^"//' -e 's/"$//' -e 's/[[:space:]]*$//' \
-            | tr -d '\r' \
-            | sort -u > /tmp/all_sources.txt
+            | tr -d '\r' | sort -u > /tmp/all_sources.txt
           MISSING=0
           while IFS= read -r f; do
             f="$(printf '%s' "$f" | tr -d '\r')"
@@ -95,18 +98,16 @@ jobs:
           echo "Safety-net stubs ensured"
 
       - name: Generate base config
-        run: make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- ${DEFCONFIG}
+        run: make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- ${DEFCONFIG} 2>&1 | tail -5
 
       - name: Disable module signature enforcement
         run: |
           ./scripts/config --file out/.config \
             -d MODULE_SIG -d MODULE_SIG_FORCE -d MODULE_SIG_ALL -d MODULE_SIG_SHA512
-          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig 2>&1 | tail -5
 
       - name: Confirm signature configs are off
-        run: |
-          echo "=== Resulting config state ==="
-          grep -E "^CONFIG_MODULE_SIG|^# CONFIG_MODULE_SIG" out/.config || true
+        run: grep -E "^CONFIG_MODULE_SIG|^# CONFIG_MODULE_SIG" out/.config || true
 
       - name: Build kernel + modules
         run: |
@@ -114,17 +115,17 @@ jobs:
             KCFLAGS="-Wno-error" \
             -j$(nproc) Image.gz modules 2>&1 | tee build.log
 
-      - name: Show last errors if build failed
+      - name: Show failure summary
         if: failure()
         run: |
-          echo "=== last 60 lines mentioning error/Error ==="
-          grep -iE "error|no such file" build.log | tail -60 || true
+          echo "=== missing files / fatal errors ==="
+          grep -iE "fatal error|no such file|undefined reference|Error [0-9]" build.log | head -40 || true
 
       - name: Collect output
         if: always()
         run: |
           mkdir -p artifact
-          cp out/arch/arm64/boot/Image.gz artifact/ 2>/dev/null || echo "Image.gz not found - check build.log"
+          cp out/arch/arm64/boot/Image.gz artifact/ 2>/dev/null || echo "Image.gz not found"
           find out -name "*.ko" -exec cp {} artifact/ \; 2>/dev/null || true
           cp build.log artifact/ 2>/dev/null || true
           ls -la artifact/
