@@ -20,16 +20,13 @@ jobs:
 
       - name: Disable OPLUS features whose source was stripped from the release
         run: |
-          # Plain -D preprocessor defines, not Kconfig symbols. The code they guard
-          # #includes headers OPLUS removed from the public drop, so undefining them
-          # removes both the includes and the code that needs them.
-          # Add a new name here whenever the build hits another missing OPLUS header.
           FEATURES="
           OPLUS_FEATURE_SCHED_ASSIST
           OPLUS_FEATURE_PHOENIX
           OPLUS_FEATURE_HEALTHINFO
           OPLUS_FEATURE_TASK_CPUSTATS
           OPLUS_FEATURE_MM_FEEDBACK
+          OPLUS_FEATURE_MULTI_FREEAREA
           "
           for feat in $FEATURES; do
             [ -z "$feat" ] && continue
@@ -40,9 +37,23 @@ jobs:
               echo "NOTE: $feat not found as a standalone list entry"
             fi
           done
-          echo ""
-          echo "=== remaining OPLUS_FEATURE entries ==="
-          grep -cE "^[ \t]*OPLUS_(FEATURE|BUG|ARCH)" OplusKernelEnvConfig.mk
+
+      - name: Fix broken comment-guard in meminfo.c (vendor typo, not our change)
+        run: |
+          sed -i -E 's|^//#ifdef OPLUS_FEATURE_HEALTHINFO$|#ifdef OPLUS_FEATURE_HEALTHINFO|' fs/proc/meminfo.c
+          sed -i -E 's|^//#endif /\*OPLUS_FEATURE_HEALTHINFO\*/$|#endif /*OPLUS_FEATURE_HEALTHINFO*/|' fs/proc/meminfo.c
+          echo "=== resulting context ==="
+          sed -n '24,28p' fs/proc/meminfo.c
+
+      - name: Add missing OPLUS_FEATURE_SCHED_ASSIST guards in sched/core.c
+        run: |
+          perl -0777 -i -pe '
+            s/(if\s*\(p->ux_state\s*&\s*SA_TYPE_TURBO\s*&&\s*clamp_id\s*==\s*UCLAMP_MIN\s*&&\s*sysctl_set_ux_uclamp_enable\)\s*\{)/#ifdef OPLUS_FEATURE_SCHED_ASSIST\n$1/;
+            s/(return\s*\(unsigned long\)uc_value;\s*\n\s*\})/$1\n#endif \/* OPLUS_FEATURE_SCHED_ASSIST *\//;
+            s/(if\s*\(p->ux_state\s*&\s*SA_TYPE_TURBO\s*&&\s*clamp_id\s*==\s*UCLAMP_MIN\s*&&\s*sysctl_set_ux_uclamp_enable\)\s*\n\s*tmp_value\s*=\s*ux_uclamp_value;)/#ifdef OPLUS_FEATURE_SCHED_ASSIST\n$1\n#endif \/* OPLUS_FEATURE_SCHED_ASSIST *\//;
+          ' kernel/sched/core.c
+          echo "=== verify: should now show #ifdef/#endif around both blocks ==="
+          grep -n "OPLUS_FEATURE_SCHED_ASSIST\|ux_state\|ux_uclamp_value" kernel/sched/core.c
 
       - name: Stub missing Kconfig + Makefile pairs (from Kconfig 'source' directives)
         run: |
@@ -95,7 +106,6 @@ jobs:
             [ -f "$d/Kconfig" ] || echo "# stub" > "$d/Kconfig"
             [ -f "$d/Makefile" ] || echo "# stub" > "$d/Makefile"
           done
-          echo "Safety-net stubs ensured"
 
       - name: Generate base config
         run: make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- ${DEFCONFIG} 2>&1 | tail -5
@@ -118,8 +128,7 @@ jobs:
       - name: Show failure summary
         if: failure()
         run: |
-          echo "=== missing files / fatal errors ==="
-          grep -iE "fatal error|no such file|undefined reference|Error [0-9]" build.log | head -40 || true
+          grep -iE "fatal error|no such file|undefined reference|error:" build.log | tail -50 || true
 
       - name: Collect output
         if: always()
