@@ -18,41 +18,52 @@ jobs:
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
             device-tree-compiler python3 cpio rsync kmod
 
+      - name: Show OPLUS feature list (for reference)
+        run: |
+          echo "=== OplusKernelEnvConfig.mk lines 60-130 ==="
+          sed -n '60,130p' OplusKernelEnvConfig.mk
+
+      - name: Disable OPLUS features whose source was stripped from the release
+        run: |
+          # These are plain -D preprocessor defines, not Kconfig symbols. The code they
+          # guard #includes headers that OPLUS removed from the public source drop, so
+          # undefining them removes both the includes and the code that needs them.
+          for feat in OPLUS_FEATURE_SCHED_ASSIST; do
+            if grep -qE "^[ \t]*${feat}[ \t]*\\\\?[ \t]*$" OplusKernelEnvConfig.mk; then
+              sed -i -E "/^[ \t]*${feat}[ \t]*\\\\?[ \t]*$/d" OplusKernelEnvConfig.mk
+              echo "Removed feature define: $feat"
+            else
+              echo "NOTE: $feat not found as a standalone list entry - check the dump above"
+            fi
+          done
+          echo ""
+          echo "=== verify it's gone ==="
+          grep -n "SCHED_ASSIST" OplusKernelEnvConfig.mk || echo "SCHED_ASSIST no longer defined"
+
       - name: Stub missing Kconfig + Makefile pairs (from Kconfig 'source' directives)
         run: |
-          echo "Scanning all 'source ...' directives (quoted, unquoted, indented) for missing targets..."
           grep -rhoP '^[ \t]*source[ \t]+\K.*' --include=Kconfig . \
             | sed -e 's/^"//' -e 's/"$//' -e 's/[[:space:]]*$//' \
             | tr -d '\r' \
             | sort -u > /tmp/all_sources.txt
-          echo "Found $(wc -l < /tmp/all_sources.txt) total source directives"
           MISSING=0
           while IFS= read -r f; do
             f="$(printf '%s' "$f" | tr -d '\r')"
             [ -z "$f" ] && continue
-            case "$f" in
-              *'$('*)
-                continue
-                ;;
-            esac
+            case "$f" in *'$('*) continue ;; esac
             if [ ! -f "$f" ]; then
               d="$(dirname "$f")"
-              if { [ -e "$d" ] || [ -L "$d" ]; } && [ ! -d "$d" ]; then
-                rm -f "$d"
-              fi
+              if { [ -e "$d" ] || [ -L "$d" ]; } && [ ! -d "$d" ]; then rm -f "$d"; fi
               mkdir -p "$d"
-              echo "# stub: file absent from public source release, auto-generated to satisfy Kconfig parser" > "$f"
-              if [ ! -f "$d/Makefile" ]; then
-                echo "# stub: empty makefile, satisfies kbuild recursive descent for stripped-out feature" > "$d/Makefile"
-              fi
+              echo "# stub: file absent from public source release" > "$f"
+              [ -f "$d/Makefile" ] || echo "# stub: empty makefile" > "$d/Makefile"
               MISSING=$((MISSING+1))
             fi
           done < /tmp/all_sources.txt
           echo "Total stubbed via Kconfig scan: $MISSING"
 
-      - name: Stub missing Makefiles (from obj-y/obj-m/obj-\$(CONFIG_x) directory descent)
+      - name: Stub missing Makefiles (from obj-y/obj-m directory descent)
         run: |
-          echo "Scanning all Makefiles for obj-y/obj-m/obj-\$(CONFIG_x) subdirectory references..."
           COUNT_FILE=/tmp/makefile_stub_count
           echo 0 > "$COUNT_FILE"
           find . -path ./out -prune -o -path ./.git -prune -o -name Makefile -print | while IFS= read -r mf; do
@@ -61,15 +72,11 @@ jobs:
             printf '%s\n' "$joined" | grep -oP '(?m)^[ \t]*obj-\S*[ \t]*[+:]?=[ \t]*\K.*' 2>/dev/null | while IFS= read -r rhs; do
               printf '%s\n' "$rhs" | grep -oE '[A-Za-z0-9_./-]+/' | while IFS= read -r tok; do
                 case "$tok" in *'$('*) continue ;; esac
-                target="${mdir#./}/${tok}"
-                target="${target%/}"
+                target="${mdir#./}/${tok}"; target="${target%/}"
                 if [ ! -f "$target/Makefile" ] && [ ! -f "$target/Kbuild" ]; then
-                  if { [ -e "$target" ] || [ -L "$target" ]; } && [ ! -d "$target" ]; then
-                    rm -f "$target"
-                  fi
+                  if { [ -e "$target" ] || [ -L "$target" ]; } && [ ! -d "$target" ]; then rm -f "$target"; fi
                   mkdir -p "$target"
-                  echo "# stub: empty makefile, satisfies kbuild recursive descent for stripped-out feature" > "$target/Makefile"
-                  echo "Stubbed Makefile for: $target"
+                  echo "# stub: empty makefile" > "$target/Makefile"
                   n=$(cat "$COUNT_FILE"); echo $((n+1)) > "$COUNT_FILE"
                 fi
               done
@@ -80,26 +87,20 @@ jobs:
       - name: Force-stub known holdouts as a safety net
         run: |
           for d in block/uxio_first arch/arm64/kernel/rootguard kernel/keventupload; do
-            if { [ -e "$d" ] || [ -L "$d" ]; } && [ ! -d "$d" ]; then
-              rm -f "$d"
-            fi
+            if { [ -e "$d" ] || [ -L "$d" ]; } && [ ! -d "$d" ]; then rm -f "$d"; fi
             mkdir -p "$d"
-            [ -f "$d/Kconfig" ] || echo "# stub: file absent from public source release, auto-generated to satisfy Kconfig parser" > "$d/Kconfig"
-            [ -f "$d/Makefile" ] || echo "# stub: empty makefile, satisfies kbuild recursive descent for stripped-out feature" > "$d/Makefile"
-            echo "Ensured stub present: $d"
+            [ -f "$d/Kconfig" ] || echo "# stub" > "$d/Kconfig"
+            [ -f "$d/Makefile" ] || echo "# stub" > "$d/Makefile"
           done
+          echo "Safety-net stubs ensured"
 
       - name: Generate base config
-        run: |
-          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- ${DEFCONFIG}
+        run: make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- ${DEFCONFIG}
 
       - name: Disable module signature enforcement
         run: |
           ./scripts/config --file out/.config \
-            -d MODULE_SIG \
-            -d MODULE_SIG_FORCE \
-            -d MODULE_SIG_ALL \
-            -d MODULE_SIG_SHA512
+            -d MODULE_SIG -d MODULE_SIG_FORCE -d MODULE_SIG_ALL -d MODULE_SIG_SHA512
           make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
 
       - name: Confirm signature configs are off
@@ -113,15 +114,23 @@ jobs:
             KCFLAGS="-Wno-error" \
             -j$(nproc) Image.gz modules 2>&1 | tee build.log
 
+      - name: Show last errors if build failed
+        if: failure()
+        run: |
+          echo "=== last 60 lines mentioning error/Error ==="
+          grep -iE "error|no such file" build.log | tail -60 || true
+
       - name: Collect output
+        if: always()
         run: |
           mkdir -p artifact
           cp out/arch/arm64/boot/Image.gz artifact/ 2>/dev/null || echo "Image.gz not found - check build.log"
           find out -name "*.ko" -exec cp {} artifact/ \; 2>/dev/null || true
-          cp build.log artifact/
+          cp build.log artifact/ 2>/dev/null || true
           ls -la artifact/
 
       - name: Upload artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: k85v1_64_k419-nosig-kernel
